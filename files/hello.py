@@ -80,6 +80,7 @@ class ClientThread(threading.Thread):
                         )
                     except socket.error as e:
                         print("Connection lost", self.name, e)
+                        self.client_sock.close()
                         if self.ws:
                             msg = STOP_P2P_LIVESTREAM_MESSAGE.copy()
                             msg["serialNumber"] = self.serialno
