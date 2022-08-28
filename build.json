@@ -1,0 +1,9 @@
+{
+  "build_from": {
+    "amd64": "alexxit/go2rtc:latest",
+    "i386": "alexxit/go2rtc:latest",
+    "armhf": "alexxit/go2rtc:latest",
+    "armv7": "alexxit/go2rtc:latest",
+    "aarch64": "alexxit/go2rtc:latest"
+  }
+}

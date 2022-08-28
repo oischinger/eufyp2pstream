@@ -1,0 +1,21 @@
+# https://github.com/AlexxIT/builder/blob/master/builder.sh
+name: eufyp2pstream
+description: Eufy P2P camera streaming application
+url: https://github.com/oischinger
+arch: [amd64, aarch64, i386, armv7]
+
+# https://developers.home-assistant.io/docs/add-ons/configuration
+version: 0.1-alpha.2
+slug: eufyp2pstream
+init: false
+startup: system
+host_network: true
+video: true
+audio: true
+ingress: true
+ingress_port: 1984
+panel_icon: mdi:camera-wireless
+map: [config, media]
+#ports:
+#  - "8554/tcp": 8554
+#  - "1935/tcp": 1935
