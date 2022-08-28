@@ -4,6 +4,12 @@ A small project that provides a Video/Audio Stream from Eufy cameras that don't 
 
 It uses [go2RTC](https://github.com/AlexxIT/go2rtc) to provide the live stream.
 
+# Howto install
+
+Copy this directory to /addons/eufyp2pstream and run it.
+
+Open the WebUI: http://HOME_ASSISTANT_HOST::1984/webrtc.html?src=camera1 and enjoy a camera stream with audio via WEBRTC.
+
 # References
 This project is inspired by:
 
