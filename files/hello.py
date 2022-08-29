@@ -6,6 +6,7 @@ import json
 import socket
 import threading
 import time
+import sys
 from queue import Queue
 
 video_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -73,10 +74,12 @@ class ClientAcceptThread(threading.Thread):
         print("Accepting connection for ", self.name)
         while self.run_event.is_set():
             self.update_threads()
+            sys.stdout.flush()
             try:
                 client_sock, client_addr = self.socket.accept()
                 client_sock.setblocking(False)
                 print ("New connection added: ", client_addr, " for ", self.name)
+                sys.stdout.flush()
                 thread = ClientSendThread(client_sock, self.queue, run_event, self.name, self.ws, self.serialno)
                 if self.ws and len(self.my_threads) == 0:
                     msg = START_P2P_LIVESTREAM_MESSAGE.copy()
