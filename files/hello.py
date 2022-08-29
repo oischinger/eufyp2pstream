@@ -32,7 +32,7 @@ START_P2P_LIVESTREAM_MESSAGE = {
 }
 
 STOP_P2P_LIVESTREAM_MESSAGE = {
-    "messageId": "start_livesteam",
+    "messageId": "stop_livesteam",
     "command": "device.stop_livestream",
     "serialNumber": None,
 }
@@ -48,7 +48,7 @@ START_LISTENING_MESSAGE = {"messageId": "start_listening", "command": "start_lis
 DRIVER_CONNECT_MESSAGE = {"messageId": "driver_connect", "command": "driver.connect"}
 
 
-class ClientThread(threading.Thread):
+class ClientAcceptThread(threading.Thread):
     def __init__(self,socket,queue : Queue,run_event,name,ws,serialno):
         threading.Thread.__init__(self)
         self.socket = socket
@@ -57,37 +57,62 @@ class ClientThread(threading.Thread):
         self.name = name
         self.ws = ws
         self.serialno = serialno
+        self.my_threads = []
+
+    def update_threads(self):
+        my_threads_before = len(self.my_threads)
+        self.my_threads = [t for t in self.my_threads if t.is_alive()]
+        if self.ws and my_threads_before > 0 and len(self.my_threads) == 0:
+            print("All clients died. Stopping Stream for ", self.name)
+
+            msg = STOP_P2P_LIVESTREAM_MESSAGE.copy()
+            msg["serialNumber"] = self.serialno
+            asyncio.run(self.ws.send_message(json.dumps(msg)))
 
     def run(self):
+        print("Accepting connection for ", self.name)
         while self.run_event.is_set():
+            self.update_threads()
             try:
-                print("Connecting ", self.name, " for ", self.serialno)
-                self.client_sock, self.client_addr = self.socket.accept()
-                self.client_sock.setblocking(False)
-                print ("New connection added: ", self.client_addr, self.name)
-                if self.ws:
+                client_sock, client_addr = self.socket.accept()
+                client_sock.setblocking(False)
+                print ("New connection added: ", client_addr, " for ", self.name)
+                thread = ClientSendThread(client_sock, self.queue, run_event, self.name, self.ws, self.serialno)
+                if self.ws and len(self.my_threads) == 0:
                     msg = START_P2P_LIVESTREAM_MESSAGE.copy()
                     msg["serialNumber"] = self.serialno
                     asyncio.run(self.ws.send_message(json.dumps(msg)))
-                while self.run_event.is_set():
-                    try:
-                        if self.queue.empty():
-                            # Send something to know if socket is dead
-                            self.client_sock.sendall(bytearray(0))
-                            time.sleep(0.1)
-                        self.client_sock.sendall(
-                            bytearray(self.queue.get(True)["data"])
-                        )
-                    except socket.error as e:
-                        print("Connection lost", self.name, e)
-                        self.client_sock.close()
-                        if self.ws:
-                            msg = STOP_P2P_LIVESTREAM_MESSAGE.copy()
-                            msg["serialNumber"] = self.serialno
-                            asyncio.run(self.ws.send_message(json.dumps(msg)))
-                        break
+                self.my_threads.append(thread)
+                thread.start()
             except socket.timeout:
                 pass
+
+class ClientSendThread(threading.Thread):
+    def __init__(self,client_sock,queue : Queue,run_event,name,ws,serialno):
+        threading.Thread.__init__(self)
+        self.client_sock = client_sock
+        self.queue = queue
+        self.run_event = run_event
+        self.name = name
+        self.ws = ws
+        self.serialno = serialno
+
+    def run(self):
+        try:
+            while self.run_event.is_set():
+                if self.queue.empty():
+                    # Send something to know if socket is dead
+                    self.client_sock.sendall(bytearray(0))
+                    time.sleep(0.1)
+                self.client_sock.sendall(
+                    bytearray(self.queue.get(True)["data"])
+                )
+        except socket.error as e:
+            print("Connection lost", self.name, e)
+            self.client_sock.close()
+        except socket.timeout:
+            print("Timeout on socket for ", self.name)
+            pass
 
 
 class Connector:
@@ -133,8 +158,8 @@ class Connector:
                 states = message_result["state"]
                 for state in states["devices"]:
                     self.serialno = state["serialNumber"]
-                self.video_thread = ClientThread(video_sock, self.video_queue, run_event, "Video", self.ws, self.serialno)
-                self.audio_thread = ClientThread(audio_sock, self.audio_queue, run_event, "Audio", self.ws, self.serialno)
+                self.video_thread = ClientAcceptThread(video_sock, self.video_queue, run_event, "Video", self.ws, self.serialno)
+                self.audio_thread = ClientAcceptThread(audio_sock, self.audio_queue, run_event, "Audio", self.ws, self.serialno)
                 self.audio_thread.start()
                 self.video_thread.start()
         if message_type == "event":
