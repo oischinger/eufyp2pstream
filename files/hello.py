@@ -50,10 +50,10 @@ DRIVER_CONNECT_MESSAGE = {"messageId": "driver_connect", "command": "driver.conn
 
 
 class ClientAcceptThread(threading.Thread):
-    def __init__(self,socket,queue : Queue,run_event,name,ws,serialno):
+    def __init__(self,socket,run_event,name,ws,serialno):
         threading.Thread.__init__(self)
         self.socket = socket
-        self.queue = queue
+        self.queues = []
         self.run_event = run_event
         self.name = name
         self.ws = ws
@@ -62,6 +62,9 @@ class ClientAcceptThread(threading.Thread):
 
     def update_threads(self):
         my_threads_before = len(self.my_threads)
+        for thread in self.my_threads:
+            if not thread.is_alive():
+                self.queues.remove(thread.queue)
         self.my_threads = [t for t in self.my_threads if t.is_alive()]
         if self.ws and my_threads_before > 0 and len(self.my_threads) == 0:
             print("All clients died. Stopping Stream for ", self.name)
@@ -80,8 +83,9 @@ class ClientAcceptThread(threading.Thread):
                 client_sock.setblocking(False)
                 print ("New connection added: ", client_addr, " for ", self.name)
                 sys.stdout.flush()
-                thread = ClientSendThread(client_sock, self.queue, run_event, self.name, self.ws, self.serialno)
-                if self.ws and len(self.my_threads) == 0:
+                thread = ClientSendThread(client_sock, run_event, self.name, self.ws, self.serialno)
+                self.queues.append(thread.queue)
+                if self.ws:
                     msg = START_P2P_LIVESTREAM_MESSAGE.copy()
                     msg["serialNumber"] = self.serialno
                     asyncio.run(self.ws.send_message(json.dumps(msg)))
@@ -91,10 +95,10 @@ class ClientAcceptThread(threading.Thread):
                 pass
 
 class ClientSendThread(threading.Thread):
-    def __init__(self,client_sock,queue : Queue,run_event,name,ws,serialno):
+    def __init__(self,client_sock,run_event,name,ws,serialno):
         threading.Thread.__init__(self)
         self.client_sock = client_sock
-        self.queue = queue
+        self.queue = Queue(100)
         self.run_event = run_event
         self.name = name
         self.ws = ws
@@ -132,8 +136,6 @@ class Connector:
         audio_sock.settimeout(1) # timeout for listening
         audio_sock.listen()
         self.ws = None
-        self.video_queue = Queue(100)
-        self.audio_queue = Queue(100)
         self.run_event = run_event
         self.serialno = ""
 
@@ -161,8 +163,8 @@ class Connector:
                 states = message_result["state"]
                 for state in states["devices"]:
                     self.serialno = state["serialNumber"]
-                self.video_thread = ClientAcceptThread(video_sock, self.video_queue, run_event, "Video", self.ws, self.serialno)
-                self.audio_thread = ClientAcceptThread(audio_sock, self.audio_queue, run_event, "Audio", self.ws, self.serialno)
+                self.video_thread = ClientAcceptThread(video_sock, run_event, "Video", self.ws, self.serialno)
+                self.audio_thread = ClientAcceptThread(audio_sock, run_event, "Audio", self.ws, self.serialno)
                 self.audio_thread.start()
                 self.video_thread.start()
         if message_type == "event":
@@ -172,18 +174,20 @@ class Connector:
                 event_value = message[EVENT_CONFIGURATION[event_type]["value"]]
                 event_data_type = EVENT_CONFIGURATION[event_type]["type"]
                 if event_data_type == "event":
-                    if self.audio_queue.full():
-                        # print("Audio queue full.")
-                        self.audio_queue.get(False)
-                    self.audio_queue.put(event_value)
+                    for queue in self.audio_thread.queues:
+                        if queue.full():
+                            # print("Video queue full.")
+                            queue.get(False)
+                        queue.put(event_value)
             if message["event"] == "livestream video data":
                 event_value = message[EVENT_CONFIGURATION[event_type]["value"]]
                 event_data_type = EVENT_CONFIGURATION[event_type]["type"]
                 if event_data_type == "event":
-                    if self.video_queue.full():
-                        # print("Video queue full.")
-                        self.video_queue.get(False)
-                    self.video_queue.put(event_value)
+                    for queue in self.video_thread.queues:
+                        if queue.full():
+                            # print("Video queue full.")
+                            queue.get(False)
+                        queue.put(event_value)
 
 async def main(run_event):
     c = Connector(run_event)
