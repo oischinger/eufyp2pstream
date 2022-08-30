@@ -44,6 +44,14 @@ SET_API_SCHEMA = {
     "schemaVersion": 11,
 }
 
+STOP_P2P_LIVESTREAM_MESSAGE = {
+    "messageId": "stop_livesteam",
+    "command": "device.stop_livestream",
+    "serialNumber": None,
+}
+
+P2P_LIVESTREAMING_STATUS = "p2pLiveStreamingStatus"
+
 START_LISTENING_MESSAGE = {"messageId": "start_listening", "command": "start_listening"}
 
 DRIVER_CONNECT_MESSAGE = {"messageId": "driver_connect", "command": "driver.connect"}
@@ -167,6 +175,7 @@ class Connector:
                 self.audio_thread = ClientAcceptThread(audio_sock, run_event, "Audio", self.ws, self.serialno)
                 self.audio_thread.start()
                 self.video_thread.start()
+
         if message_type == "event":
             message = payload[message_type]
             event_type = message["event"]
@@ -188,6 +197,13 @@ class Connector:
                             # print("Video queue full.")
                             queue.get(False)
                         queue.put(event_value)
+            if message["event"] == "livestream error":
+                print("Livestream Error!")
+                if self.ws and len(self.video_thread.queues) > 0:
+                    msg = START_P2P_LIVESTREAM_MESSAGE.copy()
+                    msg["serialNumber"] = self.serialno
+                    asyncio.run(self.ws.send_message(json.dumps(msg)))
+
 
 async def main(run_event):
     c = Connector(run_event)
