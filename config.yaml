@@ -1,7 +1,7 @@
 # https://github.com/AlexxIT/builder/blob/master/builder.sh
 name: eufyp2pstream
 description: Eufy P2P camera streaming application
-url: https://github.com/oischinger
+url: http://192.168.178.252:8123/local_eufyp2pstream
 arch: [amd64, aarch64, i386, armv7]
 
 # https://developers.home-assistant.io/docs/add-ons/configuration
@@ -13,9 +13,7 @@ host_network: true
 video: true
 audio: true
 ingress: true
-ingress_port: 1984
+ingress_port: 1997
 panel_icon: mdi:camera-wireless
 map: [config, media]
-#ports:
-#  - "8554/tcp": 8554
-#  - "1935/tcp": 1935
+ports: { "8541/tcp": 8541, "1997/tcp": 1997, "8787/tcp": 8787 }
