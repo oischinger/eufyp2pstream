@@ -81,5 +81,5 @@ class EufySecurityWebSocket:
             asyncio.run_coroutine_threadsafe(self.close_callback(), self.loop)
 
     async def send_message(self, message):
-        print(f" - WebSocket message sent. %s", message)
+        #print(f" - WebSocket message sent. %s", message)
         await self.ws.send_str(message)

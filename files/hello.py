@@ -16,6 +16,8 @@ PORT_NUMBER = 8787
 
 RTSP_PORT_NUMBER = 8541
 
+RECV_CHUNK_SIZE = 4096
+
 video_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 audio_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 backchannel_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -46,10 +48,29 @@ STOP_P2P_LIVESTREAM_MESSAGE = {
     "serialNumber": None,
 }
 
+START_TALKBACK = {
+    "messageId": "start_talkback",
+    "command": "device.start_talkback",
+    "serialNumber": None,
+}
+
+SEND_TALKBACK_AUDIO_DATA = {
+    "messageId": "talkback_audio_data",
+    "command": "device.talkback_audio_data",
+    "serialNumber": None,
+    "buffer": None
+}
+
+STOP_TALKBACK = {
+    "messageId": "stop_talkback",
+    "command": "device.stop_talkback",
+    "serialNumber": None,
+}
+
 SET_API_SCHEMA = {
     "messageId": "set_api_schema",
     "command": "set_api_schema",
-    "schemaVersion": 11,
+    "schemaVersion": 13,
 }
 
 STOP_P2P_LIVESTREAM_MESSAGE = {
@@ -61,6 +82,8 @@ STOP_P2P_LIVESTREAM_MESSAGE = {
 P2P_LIVESTREAMING_STATUS = "p2pLiveStreamingStatus"
 
 START_LISTENING_MESSAGE = {"messageId": "start_listening", "command": "start_listening"}
+
+TALKBACK_RESULT_MESSAGE = {"messageId": "talkback_audio_data", "errorCode": "device_talkback_not_running"}
 
 DRIVER_CONNECT_MESSAGE = {"messageId": "driver_connect", "command": "driver.connect"}
 
@@ -94,20 +117,24 @@ class ClientAcceptThread(threading.Thread):
 
     def run(self):
         print("Accepting connection for ", self.name)
+        msg = STOP_TALKBACK.copy()
+        msg["serialNumber"] = self.serialno
+        asyncio.run(self.ws.send_message(json.dumps(msg)))
         while self.run_event.is_set():
             self.update_threads()
             sys.stdout.flush()
             try:
                 client_sock, client_addr = self.socket.accept()
-                client_sock.setblocking(False)
                 print ("New connection added: ", client_addr, " for ", self.name)
                 sys.stdout.flush()
 
                 if self.name == "BackChannel":
+                    client_sock.setblocking(True)
                     print("Starting BackChannel")
                     thread = ClientRecvThread(client_sock, run_event, self.name, self.ws, self.serialno)
                     thread.start()
                 else:
+                    client_sock.setblocking(False)
                     thread = ClientSendThread(client_sock, run_event, self.name, self.ws, self.serialno)
                     self.queues.append(thread.queue)
                     if self.ws:
@@ -141,10 +168,11 @@ class ClientSendThread(threading.Thread):
                 )
         except socket.error as e:
             print("Connection lost", self.name, e)
-            self.client_sock.close()
+            pass
         except socket.timeout:
             print("Timeout on socket for ", self.name)
             pass
+        self.client_sock.close()
 
 class ClientRecvThread(threading.Thread):
     def __init__(self,client_sock,run_event,name,ws,serialno):
@@ -156,20 +184,36 @@ class ClientRecvThread(threading.Thread):
         self.serialno = serialno
 
     def run(self):
+        msg = START_TALKBACK.copy()
+        msg["serialNumber"] = self.serialno
+        asyncio.run(self.ws.send_message(json.dumps(msg)))
         try:
+            curr_packet = bytearray() 
             while self.run_event.is_set():
                 try:
-                    data = self.client_sock.recv(1024)
-                    print("got ", len(data))
+                    data = self.client_sock.recv(RECV_CHUNK_SIZE)
+                    curr_packet += bytearray(data)
+                    if len(data) >0 and len(data) < RECV_CHUNK_SIZE:
+                        print("Sending len ", len(data) , " . ", len(curr_packet))
+                        msg = SEND_TALKBACK_AUDIO_DATA.copy()
+                        msg["serialNumber"] = self.serialno
+                        print("Sending len ", len(bytes(curr_packet)))
+                        msg["buffer"] = list(bytes(curr_packet)) 
+                        asyncio.run(self.ws.send_message(json.dumps(msg)))
+                        curr_packet = bytearray() 
                 except BlockingIOError:
                     # Resource temporarily unavailable (errno EWOULDBLOCK)
                     pass
         except socket.error as e:
             print("Connection lost", self.name, e)
-            self.client_sock.close()
+            pass
         except socket.timeout:
             print("Timeout on socket for ", self.name)
             pass
+        self.client_sock.close()
+        msg = STOP_TALKBACK.copy()
+        msg["serialNumber"] = self.serialno
+        asyncio.run(self.ws.send_message(json.dumps(msg)))
 
 class Connector:
     def __init__(
@@ -222,6 +266,12 @@ class Connector:
                 self.audio_thread.start()
                 self.video_thread.start()
                 self.backchannel_thread.start()
+            if message_id == TALKBACK_RESULT_MESSAGE["messageId"] and "errorCode" in payload:
+                error_code = payload["errorCode"]
+                if error_code == "device_talkback_not_running":
+                    msg = START_TALKBACK.copy()
+                    msg["serialNumber"] = self.serialno
+                    asyncio.run(self.ws.send_message(json.dumps(msg)))
 
         if message_type == "event":
             message = payload[message_type]
@@ -263,9 +313,12 @@ class MyHandler(BaseHTTPRequestHandler):
         self.send_response(200)
         self.send_header("Content-type", "image/jpeg")
         self.end_headers()
-        os.system('ffmpeg -y -i rtsp://127.0.0.1:' + str(RTSP_PORT_NUMBER) + '/camera1 -frames:v 1  /tmp/frame.jpg')
-        with open("/tmp/frame.jpg", "rb") as file:
-                self.wfile.write(file.read())
+        try:
+            os.system('ffmpeg -y -i rtsp://127.0.0.1:' + str(RTSP_PORT_NUMBER) + '/camera1 -frames:v 1  /tmp/frame.jpg')
+            with open("/tmp/frame.jpg", "rb") as file:
+                    self.wfile.write(file.read())
+        except Exception as e:
+            print("Exception: ", e)
 
 async def main(run_event):
     c = Connector(run_event)

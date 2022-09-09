@@ -5,7 +5,7 @@ url: http://192.168.178.252:8123/local_eufyp2pstream
 arch: [amd64, aarch64, i386, armv7]
 
 # https://developers.home-assistant.io/docs/add-ons/configuration
-version: 0.1-alpha.2
+version: 0.1-alpha.3
 slug: eufyp2pstream
 init: false
 startup: system
