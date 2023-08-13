@@ -2,7 +2,7 @@
 
 set +e
 
-cd files
+cd /files
 
 while true; do
     killall python3
