@@ -7,7 +7,7 @@ It uses [go2RTC](https://github.com/AlexxIT/go2rtc) to provide the live stream.
 # Howto install
 
 ## Prerequisites
-Install and configure the [Eufy Security Addon](https://github.com/fuatakgun/eufy_security_addon) first. See the instructions [here](https://github.com/fuatakgun/eufy_security).
+Install and configure the [Eufy Security Addon](https://github.com/bropat/hassio-eufy-security-ws) first. See the instructions [here](https://github.com/fuatakgun/eufy_security).
 
 ## Install this addon
 Copy this directory to `/addons/eufyp2pstream` on your Home Assistant host and [install the addon](https://my.home-assistant.io/redirect/supervisor_addon/?addon=local_eufyp2pstream).
