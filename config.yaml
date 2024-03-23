@@ -5,15 +5,11 @@ url: http://192.168.178.252:8123/local_eufyp2pstream
 arch: [amd64, aarch64, i386, armv7]
 
 # https://developers.home-assistant.io/docs/add-ons/configuration
-version: 0.1-alpha.4
+version: 0.1-alpha.9
 slug: eufyp2pstream
 init: false
-startup: system
-host_network: true
-video: true
-audio: true
-ingress: true
-ingress_port: 1997
+startup: application
 panel_icon: mdi:camera-wireless
 map: [config, media]
-ports: { "8541/tcp": 8541, "1997/tcp": 1997, "8787/tcp": 8787 }
+host_network: true
+ports: { "63336/tcp": 63336, "63337/tcp": 63337, "63338/tcp": 63338 }

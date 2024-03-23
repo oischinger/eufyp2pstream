@@ -7,14 +7,10 @@ import socket
 import threading
 import time
 import sys
+import signal
 from http.server import BaseHTTPRequestHandler, HTTPServer
 import os
 from queue import Queue
-
-HOST_NAME = '0.0.0.0'
-PORT_NUMBER = 8787
-
-RTSP_PORT_NUMBER = 8541
 
 RECV_CHUNK_SIZE = 4096
 
@@ -37,13 +33,13 @@ EVENT_CONFIGURATION: dict = {
 }
 
 START_P2P_LIVESTREAM_MESSAGE = {
-    "messageId": "start_livesteam",
+    "messageId": "start_livestream",
     "command": "device.start_livestream",
     "serialNumber": None,
 }
 
 STOP_P2P_LIVESTREAM_MESSAGE = {
-    "messageId": "stop_livesteam",
+    "messageId": "stop_livestream",
     "command": "device.stop_livestream",
     "serialNumber": None,
 }
@@ -73,11 +69,6 @@ SET_API_SCHEMA = {
     "schemaVersion": 13,
 }
 
-STOP_P2P_LIVESTREAM_MESSAGE = {
-    "messageId": "stop_livesteam",
-    "command": "device.stop_livestream",
-    "serialNumber": None,
-}
 
 P2P_LIVESTREAMING_STATUS = "p2pLiveStreamingStatus"
 
@@ -87,6 +78,14 @@ TALKBACK_RESULT_MESSAGE = {"messageId": "talkback_audio_data", "errorCode": "dev
 
 DRIVER_CONNECT_MESSAGE = {"messageId": "driver_connect", "command": "driver.connect"}
 
+run_event = threading.Event()
+
+def exit_handler(signum, frame):
+    print(f'Signal handler called with signal {signum}')
+    run_event.set()
+
+# Install signal handler
+signal.signal(signal.SIGINT, exit_handler)
 
 class ClientAcceptThread(threading.Thread):
     def __init__(self,socket,run_event,name,ws,serialno):
@@ -107,9 +106,11 @@ class ClientAcceptThread(threading.Thread):
         self.my_threads = [t for t in self.my_threads if t.is_alive()]
         if self.ws and my_threads_before > 0 and len(self.my_threads) == 0:
             if self.name == "BackChannel":
-                print("All clients died. Stopping Stream for ", self.name)
+                print("All clients died (BackChannel): ", self.name)
+                sys.stdout.flush()
             else:
-                print("All clients died. Stopping Stream for ", self.name)
+                print("All clients died. Stopping Stream: ", self.name)
+                sys.stdout.flush()
 
                 msg = STOP_P2P_LIVESTREAM_MESSAGE.copy()
                 msg["serialNumber"] = self.serialno
@@ -120,7 +121,7 @@ class ClientAcceptThread(threading.Thread):
         msg = STOP_TALKBACK.copy()
         msg["serialNumber"] = self.serialno
         asyncio.run(self.ws.send_message(json.dumps(msg)))
-        while self.run_event.is_set():
+        while not self.run_event.is_set():
             self.update_threads()
             sys.stdout.flush()
             try:
@@ -157,15 +158,21 @@ class ClientSendThread(threading.Thread):
         self.serialno = serialno
 
     def run(self):
+        print ("Thread running: ", self.name)
+        sys.stdout.flush()
+
         try:
-            while self.run_event.is_set():
+            while not self.run_event.is_set():
                 if self.queue.empty():
                     # Send something to know if socket is dead
                     self.client_sock.sendall(bytearray(0))
                     time.sleep(0.1)
-                self.client_sock.sendall(
-                    bytearray(self.queue.get(True)["data"])
-                )
+                else:
+                    sys.stdout.flush()
+                    self.client_sock.sendall(
+                        bytearray(self.queue.get(True)["data"])
+                    )
+                    sys.stdout.flush()
         except socket.error as e:
             print("Connection lost", self.name, e)
             pass
@@ -173,6 +180,8 @@ class ClientSendThread(threading.Thread):
             print("Timeout on socket for ", self.name)
             pass
         self.client_sock.close()
+        print ("Thread stopping: ", self.name)
+        sys.stdout.flush()
 
 class ClientRecvThread(threading.Thread):
     def __init__(self,client_sock,run_event,name,ws,serialno):
@@ -189,15 +198,13 @@ class ClientRecvThread(threading.Thread):
         asyncio.run(self.ws.send_message(json.dumps(msg)))
         try:
             curr_packet = bytearray() 
-            while self.run_event.is_set():
+            while not self.run_event.is_set():
                 try:
                     data = self.client_sock.recv(RECV_CHUNK_SIZE)
                     curr_packet += bytearray(data)
                     if len(data) >0 and len(data) < RECV_CHUNK_SIZE:
-                        print("Sending len ", len(data) , " . ", len(curr_packet))
                         msg = SEND_TALKBACK_AUDIO_DATA.copy()
                         msg["serialNumber"] = self.serialno
-                        print("Sending len ", len(bytes(curr_packet)))
                         msg["buffer"] = list(bytes(curr_packet)) 
                         asyncio.run(self.ws.send_message(json.dumps(msg)))
                         curr_packet = bytearray() 
@@ -220,15 +227,15 @@ class Connector:
         self,
         run_event,
     ):
-        video_sock.bind(("127.0.0.1", 63336))
+        video_sock.bind(("0.0.0.0", 63336))
         video_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         video_sock.settimeout(1) # timeout for listening
         video_sock.listen()
-        audio_sock.bind(("127.0.0.1", 63337))
+        audio_sock.bind(("0.0.0.0", 63337))
         audio_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         audio_sock.settimeout(1) # timeout for listening
         audio_sock.listen()
-        backchannel_sock.bind(("127.0.0.1", 63338))
+        backchannel_sock.bind(("0.0.0.0", 63338))
         backchannel_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         backchannel_sock.settimeout(1) # timeout for listening
         backchannel_sock.listen()
@@ -244,17 +251,21 @@ class Connector:
 
     async def on_close(self):
         print(f" on_close - executed")
+        self.ws.connect()
+        self.ws.send_message(json.dumps(START_LISTENING_MESSAGE))
+        self.ws.send_message(json.dumps(SET_API_SCHEMA))
+        self.ws.send_message(json.dumps(DRIVER_CONNECT_MESSAGE))
 
     async def on_error(self, message):
         print(f" on_error - executed - {message}")
 
     async def on_message(self, message):
-        #print(f"- on_message {message}")
         payload = message.json()
         message_type: str = payload["type"]
         if message_type == "result":
             message_id = payload["messageId"]
-            print(f"on_message - {payload}")
+            print(f"on_message result: {payload}")
+            sys.stdout.flush()
             if message_id == START_LISTENING_MESSAGE["messageId"]:
                 message_result = payload[message_type]
                 states = message_result["state"]
@@ -276,22 +287,25 @@ class Connector:
         if message_type == "event":
             message = payload[message_type]
             event_type = message["event"]
+            sys.stdout.flush()
             if message["event"] == "livestream audio data":
+                #print(f"on_audio - {payload}")
                 event_value = message[EVENT_CONFIGURATION[event_type]["value"]]
                 event_data_type = EVENT_CONFIGURATION[event_type]["type"]
                 if event_data_type == "event":
                     for queue in self.audio_thread.queues:
                         if queue.full():
-                            # print("Video queue full.")
+                            print("Audio queue full.")
                             queue.get(False)
                         queue.put(event_value)
-            if message["event"] == "livestream video data":
+            if message["event"] == "livestream video data":                
+                #print(f"on_video - {payload}")
                 event_value = message[EVENT_CONFIGURATION[event_type]["value"]]
                 event_data_type = EVENT_CONFIGURATION[event_type]["type"]
                 if event_data_type == "event":
                     for queue in self.video_thread.queues:
                         if queue.full():
-                            # print("Video queue full.")
+                            print("Video queue full.")
                             queue.get(False)
                         queue.put(event_value)
             if message["event"] == "livestream error":
@@ -301,30 +315,12 @@ class Connector:
                     msg["serialNumber"] = self.serialno
                     asyncio.run(self.ws.send_message(json.dumps(msg)))
 
+# Websocket connector
+c = Connector(run_event)
 
-class MyHandler(BaseHTTPRequestHandler):
-    def do_HEAD(self):
-        self.send_response(200)
-        self.send_header("Content-type", "image/jpeg")
-        self.end_headers()
-
-    def do_GET(self):
-        """Respond to a GET request."""
-        self.send_response(200)
-        self.send_header("Content-type", "image/jpeg")
-        self.end_headers()
-        try:
-            os.system('ffmpeg -y -i rtsp://127.0.0.1:' + str(RTSP_PORT_NUMBER) + '/camera1 -frames:v 1  /tmp/frame.jpg')
-            with open("/tmp/frame.jpg", "rb") as file:
-                    self.wfile.write(file.read())
-        except Exception as e:
-            print("Exception: ", e)
-
-async def main(run_event):
-    c = Connector(run_event)
-
+async def init_websocket():
     ws: EufySecurityWebSocket = EufySecurityWebSocket(
-        "127.0.0.1",
+        "402f1039-eufy-security-ws",
         3000,
         aiohttp.ClientSession(),
         c.on_open,
@@ -334,24 +330,13 @@ async def main(run_event):
     )
     c.setWs(ws)
     await ws.connect()
-
     await ws.send_message(json.dumps(START_LISTENING_MESSAGE))
     await ws.send_message(json.dumps(SET_API_SCHEMA))
     await ws.send_message(json.dumps(DRIVER_CONNECT_MESSAGE))
-    await asyncio.sleep(1000000000000000000000005)
+    while not run_event.is_set():
+        await asyncio.sleep(1000)
 
 
-def http_serve():
-    server_class = HTTPServer
-    httpd = server_class((HOST_NAME, PORT_NUMBER), MyHandler)
-    httpd.serve_forever()
+loop = asyncio.get_event_loop()
+loop.run_until_complete(init_websocket())
 
-run_event = threading.Event()
-run_event.set()
-try:
-    x = threading.Thread(target=http_serve)
-    x.start()
-    asyncio.run(main(run_event))
-except (KeyboardInterrupt, SystemExit):
-    #httpd.server_close()
-    run_event.clear()

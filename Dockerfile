@@ -1,10 +1,15 @@
-FROM alexxit/go2rtc:latest
+ARG BUILD_FROM=ghcr.io/hassio-addons/base:14.1.0
+# hadolint ignore=DL3006
+FROM ${BUILD_FROM}
+
 RUN apk add --no-cache python3
 RUN apk add --no-cache py-pip
 
 RUN pip install aiohttp asyncio
 
-COPY files/ /files/
-COPY files/go2rtc.yaml /root/
+COPY files/run.sh /
+COPY files/hello.py /
+COPY files/websocket.py /
+RUN chmod a+x /run.sh
 
-CMD ["bash", "/files/run.sh"]
+CMD ["/run.sh"]
