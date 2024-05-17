@@ -253,10 +253,10 @@ class Connector:
 
     async def on_close(self):
         print(f" on_close - executed")
-        self.ws.connect()
-        self.ws.send_message(json.dumps(START_LISTENING_MESSAGE))
-        self.ws.send_message(json.dumps(SET_API_SCHEMA))
-        self.ws.send_message(json.dumps(DRIVER_CONNECT_MESSAGE))
+        await self.ws.connect()
+        await self.ws.send_message(json.dumps(START_LISTENING_MESSAGE))
+        await self.ws.send_message(json.dumps(SET_API_SCHEMA))
+        await self.ws.send_message(json.dumps(DRIVER_CONNECT_MESSAGE))
 
     async def on_error(self, message):
         print(f" on_error - executed - {message}")
