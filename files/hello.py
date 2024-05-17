@@ -179,6 +179,7 @@ class ClientSendThread(threading.Thread):
         except socket.timeout:
             print("Timeout on socket for ", self.name)
             pass
+        self.client_sock.shutdown(socket.SHUT_RDWR)
         self.client_sock.close()
         print ("Thread stopping: ", self.name)
         sys.stdout.flush()
@@ -217,6 +218,7 @@ class ClientRecvThread(threading.Thread):
         except socket.timeout:
             print("Timeout on socket for ", self.name)
             pass
+        self.client_sock.shutdown(socket.SHUT_RDWR)
         self.client_sock.close()
         msg = STOP_TALKBACK.copy()
         msg["serialNumber"] = self.serialno
