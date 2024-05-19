@@ -179,7 +179,10 @@ class ClientSendThread(threading.Thread):
         except socket.timeout:
             print("Timeout on socket for ", self.name)
             pass
-        self.client_sock.shutdown(socket.SHUT_RDWR)
+        try:
+            self.client_sock.shutdown(socket.SHUT_RDWR)
+        except OSError:
+            print ("Error shutdown socket: ", self.name)
         self.client_sock.close()
         print ("Thread stopping: ", self.name)
         sys.stdout.flush()
@@ -218,7 +221,10 @@ class ClientRecvThread(threading.Thread):
         except socket.timeout:
             print("Timeout on socket for ", self.name)
             pass
-        self.client_sock.shutdown(socket.SHUT_RDWR)
+        try:
+            self.client_sock.shutdown(socket.SHUT_RDWR)
+        except OSError:
+            print ("Error shutdown socket: ", self.name)
         self.client_sock.close()
         msg = STOP_TALKBACK.copy()
         msg["serialNumber"] = self.serialno
@@ -245,6 +251,23 @@ class Connector:
         self.run_event = run_event
         self.serialno = ""
 
+    def stop(self):
+        try:                                                                                            
+            self.video_sock.shutdown(socket.SHUT_RDWR)                                                 
+        except OSError:                                                                                 
+            print ("Error shutdown socket")                                                
+        self.video_sock.close()
+        try:                 
+            self.audio_sock.shutdown(socket.SHUT_RDWR)
+        except OSError:      
+            print ("Error shutdown socket")
+        self.audio_sock.close()
+        try:                 
+            self.backchannel_sock.shutdown(socket.SHUT_RDWR)
+        except OSError:      
+            print ("Error shutdown socket")
+        self.backchannel_sock.close()
+
     def setWs(self, ws : EufySecurityWebSocket):
         self.ws = ws
 
@@ -253,10 +276,10 @@ class Connector:
 
     async def on_close(self):
         print(f" on_close - executed")
-        await self.ws.connect()
-        await self.ws.send_message(json.dumps(START_LISTENING_MESSAGE))
-        await self.ws.send_message(json.dumps(SET_API_SCHEMA))
-        await self.ws.send_message(json.dumps(DRIVER_CONNECT_MESSAGE))
+        self.run_event.set()
+        self.ws = None
+        stop()
+        os._exit(-1)
 
     async def on_error(self, message):
         print(f" on_error - executed - {message}")
@@ -331,13 +354,17 @@ async def init_websocket():
         c.on_error,
     )
     c.setWs(ws)
-    await ws.connect()
-    await ws.send_message(json.dumps(START_LISTENING_MESSAGE))
-    await ws.send_message(json.dumps(SET_API_SCHEMA))
-    await ws.send_message(json.dumps(DRIVER_CONNECT_MESSAGE))
-    while not run_event.is_set():
-        await asyncio.sleep(1000)
-
+    try:
+        await ws.connect()
+        await ws.send_message(json.dumps(START_LISTENING_MESSAGE))
+        await ws.send_message(json.dumps(SET_API_SCHEMA))
+        await ws.send_message(json.dumps(DRIVER_CONNECT_MESSAGE))
+        while not run_event.is_set():
+            await asyncio.sleep(1000)
+    except Exception as ex:
+        print(ex)
+        print("init_websocket failed. Exiting.")
+    os._exit(-1)
 
 loop = asyncio.get_event_loop()
 loop.run_until_complete(init_websocket())
