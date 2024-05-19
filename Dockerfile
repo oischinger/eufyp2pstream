@@ -8,7 +8,7 @@ RUN apk add --no-cache py-pip
 RUN pip install aiohttp asyncio
 
 COPY files/run.sh /
-COPY files/hello.py /
+COPY files/eufyp2pstream.py /
 COPY files/websocket.py /
 RUN chmod a+x /run.sh
 
