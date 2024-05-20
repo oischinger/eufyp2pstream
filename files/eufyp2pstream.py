@@ -346,7 +346,7 @@ c = Connector(run_event)
 async def init_websocket():
     ws: EufySecurityWebSocket = EufySecurityWebSocket(
         "402f1039-eufy-security-ws",
-        3000,
+        sys.argv[1],
         aiohttp.ClientSession(),
         c.on_open,
         c.on_message,
