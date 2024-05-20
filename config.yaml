@@ -11,5 +11,5 @@ init: false
 startup: application
 panel_icon: mdi:camera-wireless
 map: [config, media]
-host_network: true
+host_network: false
 ports: { "63336/tcp": 63336, "63337/tcp": 63337, "63338/tcp": 63338 }
