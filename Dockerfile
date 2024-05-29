@@ -7,7 +7,7 @@ RUN \
         python3 \
         py-pip \
     \
-    && apk add --no-cache --virtual
+    && apk add --no-cache --virtual \
         .build-dependencies \
         build-base \
         python3-dev \
