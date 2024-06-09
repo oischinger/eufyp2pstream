@@ -47,8 +47,8 @@ mode: webrtc                # For faster activation you can force it to use webr
 style: 'video {aspect-ratio: 16/12; object-fit: fill;}' # Use this to ensure your lovelace layouts doesn't jump when the stream is activated 
 ```
 
-## Talkbac kwith WebRTC card
-Append the following line to your webrtc-camera card in lovelace: `media: video,audio,microphone` to enable talkback. Note that your Home Assitant instance needs to use https with a valid certificate. Otherwise browsers will not allow microphone access.
+## Talkback with WebRTC card
+Append the following line to your webrtc-camera card in lovelace: `media: video,audio,microphone` to enable talkback. Note that your Home Assistant instance needs to use https with a valid certificate. Otherwise browsers will not allow microphone access.
 
 # FAQ
 
