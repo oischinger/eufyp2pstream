@@ -164,16 +164,20 @@ class ClientSendThread(threading.Thread):
 
         try:
             while not self.run_event.is_set():
-                if self.queue.empty():
-                    # Send something to know if socket is dead
-                    self.client_sock.sendall(bytearray(0))
-                    time.sleep(0.1)
-                else:
+                ready_to_read, ready_to_write, in_error = \
+                    select.select([], [self.client_sock], [self.client_sock], 2)
+                if len(in_error):
+                    print("Exception in socket", self.name)
                     sys.stdout.flush()
+                    break
+                if not len(ready_to_write):
+                    print("Socket not ready to write ", self.name)
+                    sys.stdout.flush()
+                    break
+                if not self.queue.empty():
                     self.client_sock.sendall(
                         bytearray(self.queue.get(True)["data"])
                     )
-                    sys.stdout.flush()
         except socket.error as e:
             print("Connection lost", self.name, e)
             pass
@@ -209,7 +213,7 @@ class ClientRecvThread(threading.Thread):
                     ready_to_read, ready_to_write, in_error = \
                         select.select([self.client_sock,], [], [self.client_sock], 2)
                     if len(in_error):
-                        print("Exception in socket", self.name, e)
+                        print("Exception in socket", self.name)
                         sys.stdout.flush()
                         break
                     if len(ready_to_read):
@@ -260,15 +264,18 @@ class Connector:
     ):
         video_sock.bind(("0.0.0.0", 63336))
         video_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        video_sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
         video_sock.settimeout(1) # timeout for listening
         video_sock.listen()
         audio_sock.bind(("0.0.0.0", 63337))
         audio_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        audio_sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
         audio_sock.settimeout(1) # timeout for listening
         audio_sock.listen()
         backchannel_sock.bind(("0.0.0.0", 63338))
         backchannel_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         backchannel_sock.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
+        backchannel_sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
         backchannel_sock.settimeout(1) # timeout for listening
         backchannel_sock.listen()
         self.ws = None
