@@ -4,6 +4,7 @@ import aiohttp
 import asyncio
 import json
 import socket
+import select
 import threading
 import time
 import sys
@@ -202,16 +203,33 @@ class ClientRecvThread(threading.Thread):
         asyncio.run(self.ws.send_message(json.dumps(msg)))
         try:
             curr_packet = bytearray() 
+            no_data = 0
             while not self.run_event.is_set():
                 try:
-                    data = self.client_sock.recv(RECV_CHUNK_SIZE)
-                    curr_packet += bytearray(data)
-                    if len(data) >0 and len(data) < RECV_CHUNK_SIZE:
-                        msg = SEND_TALKBACK_AUDIO_DATA.copy()
-                        msg["serialNumber"] = self.serialno
-                        msg["buffer"] = list(bytes(curr_packet)) 
-                        asyncio.run(self.ws.send_message(json.dumps(msg)))
-                        curr_packet = bytearray() 
+                    ready_to_read, ready_to_write, in_error = \
+                        select.select([self.client_sock,], [], [self.client_sock], 2)
+                    if len(in_error):
+                        print("Exception in socket", self.name, e)
+                        sys.stdout.flush()
+                        break
+                    if len(ready_to_read):
+                        data = self.client_sock.recv(RECV_CHUNK_SIZE)
+                        curr_packet += bytearray(data)
+                        if len(data) > 0: # and len(data) <= RECV_CHUNK_SIZE:
+                            msg = SEND_TALKBACK_AUDIO_DATA.copy()
+                            msg["serialNumber"] = self.serialno
+                            msg["buffer"] = list(bytes(curr_packet)) 
+                            asyncio.run(self.ws.send_message(json.dumps(msg)))
+                            curr_packet = bytearray() 
+                            no_data = 0
+                        else:
+                            no_data += 1
+                    else:
+                        no_data += 1
+                    if (no_data >= 15):
+                        print("15x in a row no data in socket ", self.name)
+                        sys.stdout.flush()
+                        break
                 except BlockingIOError:
                     # Resource temporarily unavailable (errno EWOULDBLOCK)
                     pass
@@ -221,10 +239,15 @@ class ClientRecvThread(threading.Thread):
         except socket.timeout:
             print("Timeout on socket for ", self.name)
             pass
+        except select.error:
+            print("Select error on socket ", self.name)
+            pass
+        sys.stdout.flush()
         try:
             self.client_sock.shutdown(socket.SHUT_RDWR)
         except OSError:
             print ("Error shutdown socket: ", self.name)
+        sys.stdout.flush()
         self.client_sock.close()
         msg = STOP_TALKBACK.copy()
         msg["serialNumber"] = self.serialno
@@ -245,6 +268,7 @@ class Connector:
         audio_sock.listen()
         backchannel_sock.bind(("0.0.0.0", 63338))
         backchannel_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        backchannel_sock.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
         backchannel_sock.settimeout(1) # timeout for listening
         backchannel_sock.listen()
         self.ws = None
@@ -252,19 +276,19 @@ class Connector:
         self.serialno = ""
 
     def stop(self):
-        try:                                                                                            
-            self.video_sock.shutdown(socket.SHUT_RDWR)                                                 
-        except OSError:                                                                                 
-            print ("Error shutdown socket")                                                
+        try:
+            self.video_sock.shutdown(socket.SHUT_RDWR)
+        except OSError:
+            print ("Error shutdown socket")
         self.video_sock.close()
-        try:                 
+        try:
             self.audio_sock.shutdown(socket.SHUT_RDWR)
-        except OSError:      
+        except OSError:
             print ("Error shutdown socket")
         self.audio_sock.close()
-        try:                 
+        try:
             self.backchannel_sock.shutdown(socket.SHUT_RDWR)
-        except OSError:      
+        except OSError:
             print ("Error shutdown socket")
         self.backchannel_sock.close()
 
@@ -289,8 +313,10 @@ class Connector:
         message_type: str = payload["type"]
         if message_type == "result":
             message_id = payload["messageId"]
-            print(f"on_message result: {payload}")
-            sys.stdout.flush()
+            if message_id != SEND_TALKBACK_AUDIO_DATA["messageId"]:
+                # Avoid spamming of TALKBACK_AUDIO_DATA logs
+                print(f"on_message result: {payload}")
+                sys.stdout.flush()
             if message_id == START_LISTENING_MESSAGE["messageId"]:
                 message_result = payload[message_type]
                 states = message_result["state"]
@@ -307,7 +333,7 @@ class Connector:
                 if error_code == "device_talkback_not_running":
                     msg = START_TALKBACK.copy()
                     msg["serialNumber"] = self.serialno
-                    asyncio.run(self.ws.send_message(json.dumps(msg)))
+                    await self.ws.send_message(json.dumps(msg))
 
         if message_type == "event":
             message = payload[message_type]
@@ -338,7 +364,7 @@ class Connector:
                 if self.ws and len(self.video_thread.queues) > 0:
                     msg = START_P2P_LIVESTREAM_MESSAGE.copy()
                     msg["serialNumber"] = self.serialno
-                    asyncio.run(self.ws.send_message(json.dumps(msg)))
+                    await self.ws.send_message(json.dumps(msg))
 
 # Websocket connector
 c = Connector(run_event)
