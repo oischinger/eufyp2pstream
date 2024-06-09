@@ -19,8 +19,11 @@ Open the [Addon's WebUI](https://my.home-assistant.io/redirect/supervisor_ingres
 Go to the go2RTC Webui and select `Config`. Enter a new configuration for the Eufy camera:
 ```
 streams:
-  doorbell: exec:ffmpeg -analyzeduration 1200000 -i tcp://127.0.0.1:63337?timeout=100000000 -analyzeduration 1200000 -f h264 -i tcp://127.0.0.1:63336?timeout=100000000 -strict -2 -c:a opus -c:v copy  -hls_init_time 0 -hls_time 1 -hls_segment_type mpegts -hls_playlist_type event  -hls_list_size 0 -preset ultrafast -tune zerolatency -g 15 -sc_threshold 0 -fflags genpts+nobuffer+flush_packets  -sc_threshold 0  -g 15 -map 0:a -map 1:v -rtsp_transport tcp -f rtsp {output}
+  doorbell:
+    - exec:ffmpeg -an -sn -dn -analyzeduration 1200000 -f h264 -fflags +discardcorrupt+nobuffer -flags low_delay -i tcp://127.0.0.1:63336?timeout=100000000 -itsoffset -2 -vn -sn -dn -analyzeduration 1200000 -fflags +discardcorrupt+nobuffer -flags low_delay -i tcp://127.0.0.1:63337?timeout=100000000 -preset ultrafast -tune zerolatency -sc_threshold 0 -fflags genpts+nobuffer+flush_packets -map 0:v -map 1:a -preset ultrafast -c:a opus -application lowdelay -frame_duration 20 -codec:v copy -tune zerolatency -movflags +faststart -g 15 -r 15 -strict -2 -rtsp_transport tcp -f rtsp {output}
+    - "exec:ffmpeg -fflags nobuffer -f alaw -ar 8000 -i pipe: -vn -sn -dn -c:a aac -b:a 24k -ar 16k -ac 2 -f adts tcp://127.0.0.1:63338#backchannel=1#killsignal=15#killtimeout=3"
 ```
+This configures two ffmpeg processes. The first one is for video+audio, the second one is for Talkback.
 
 # References
 This project is inspired by:
@@ -32,6 +35,7 @@ This project is inspired by:
 
 # Example Use Cases
 
+## Audio/Video Streaming with WebRTC card
 With the [WebRTC Camera Custom Card](https://github.com/AlexxIT/WebRTC) you can show the camera stream on your lovelace dashboard. It ensures that the stream is only started when the card is visible. It makes sense to display it only on conditions (e.g. as part of a conditional card that pops up when your doorbell rings or when an input_boolean is on):
 
 Install the [WebRTC Camera Custom Component](https://github.com/AlexxIT/WebRTC) and create a card as follows:
@@ -43,10 +47,10 @@ mode: webrtc                # For faster activation you can force it to use webr
 style: 'video {aspect-ratio: 16/12; object-fit: fill;}' # Use this to ensure your lovelace layouts doesn't jump when the stream is activated 
 ```
 
-# TODO
+## Talkbac kwith WebRTC card
+Append the following line to your webrtc-camera card in lovelace: `media: video,audio,microphone` to enable talkback. Note that your Home Assitant instance needs to use https with a valid certificate. Otherwise browsers will not allow microphone access.
 
-## Talkback
+# FAQ
 
-To play an audio file start the P2P stream via the WebRTC URL and spin up an ffmpeg process like this:
-
-`ffmpeg  -re -stream_loop -1 -i test.mp3 -vn -sn -dn -c:a aac  -b:a 20k -ar 16k -ac 2 -f adts tcp://127.0.0.1:63338`
+# I am experiencing audio delay
+To keep audio in sync I used this parameter in the go2RTC config: `-itsoffset -2` to account for a 2 second audio delay.
