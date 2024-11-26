@@ -5,7 +5,7 @@ url: http://192.168.178.252:8123/local_eufyp2pstream
 arch: [amd64, aarch64, i386, armv7]
 
 # https://developers.home-assistant.io/docs/add-ons/configuration
-version: 0.2.1-beta
+version: 0.3.0-beta
 slug: eufyp2pstream
 init: false
 startup: application
@@ -14,6 +14,116 @@ map: [config, media]
 host_network: false
 options:
   eufy_security_ws_port: 3000
+  debug_log: false
 schema:
   eufy_security_ws_port: port
-ports: { "63336/tcp": 63336, "63337/tcp": 63337, "63338/tcp": 63338 }
+  debug_log: bool
+  camera_1_serial_number: "str?"
+  camera_2_serial_number: "str?"
+  camera_3_serial_number: "str?"
+  camera_4_serial_number: "str?"
+  camera_5_serial_number: "str?"
+  camera_6_serial_number: "str?"
+  camera_7_serial_number: "str?"
+  camera_8_serial_number: "str?"
+  camera_9_serial_number: "str?"
+  camera_10_serial_number: "str?"
+  camera_11_serial_number: "str?"
+  camera_12_serial_number: "str?"
+  camera_13_serial_number: "str?"
+  camera_14_serial_number: "str?"
+  camera_15_serial_number: "str?"
+ports: {
+  "63336/tcp": 63336,
+  "63337/tcp": 63337,
+  "63338/tcp": 63338,
+  "63339/tcp": 63339,
+  "63340/tcp": 63340,
+  "63341/tcp": 63341,
+  "63342/tcp": 63342,
+  "63343/tcp": 63343,
+  "63344/tcp": 63344,
+  "63345/tcp": 63345,
+  "63346/tcp": 63346,
+  "63347/tcp": 63347,
+  "63348/tcp": 63348,
+  "63349/tcp": 63349,
+  "63350/tcp": 63350,
+  "63351/tcp": 63351,
+  "63352/tcp": 63352,
+  "63353/tcp": 63353,
+  "63354/tcp": 63354,
+  "63355/tcp": 63355,
+  "63356/tcp": 63356,
+  "63357/tcp": 63357,
+  "63358/tcp": 63358,
+  "63359/tcp": 63359,
+  "63360/tcp": 63360,
+  "63361/tcp": 63361,
+  "63362/tcp": 63362,
+  "63363/tcp": 63363,
+  "63364/tcp": 63364,
+  "63365/tcp": 63365,
+  "63366/tcp": 63366,
+  "63367/tcp": 63367,
+  "63368/tcp": 63368,
+  "63369/tcp": 63369,
+  "63370/tcp": 63370,
+  "63371/tcp": 63371,
+  "63372/tcp": 63372,
+  "63373/tcp": 63373,
+  "63374/tcp": 63374,
+  "63375/tcp": 63375,
+  "63376/tcp": 63376,
+  "63377/tcp": 63377,
+  "63378/tcp": 63378,
+  "63379/tcp": 63379,
+  "63380/tcp": 63380,
+}
+ports_description: {
+  "63336/tcp": "Camera-1 Video Stream",
+  "63337/tcp": "Camera-1 Audio Stream",
+  "63338/tcp": "Camera-1 Backchannel",
+  "63339/tcp": "Camera-2 Video Stream",
+  "63340/tcp": "Camera-2 Audio Stream",
+  "63341/tcp": "Camera-2 Backchannel",
+  "63342/tcp": "Camera-3 Video Stream",
+  "63343/tcp": "Camera-3 Audio Stream",
+  "63344/tcp": "Camera-3 Backchannel",
+  "63345/tcp": "Camera-4 Video Stream",
+  "63346/tcp": "Camera-4 Audio Stream",
+  "63347/tcp": "Camera-4 Backchannel",
+  "63348/tcp": "Camera-5 Video Stream",
+  "63349/tcp": "Camera-5 Audio Stream",
+  "63350/tcp": "Camera-5 Backchannel",
+  "63351/tcp": "Camera-6 Video Stream",
+  "63352/tcp": "Camera-6 Audio Stream",
+  "63353/tcp": "Camera-6 Backchannel",
+  "63354/tcp": "Camera-7 Video Stream",
+  "63355/tcp": "Camera-7 Audio Stream",
+  "63356/tcp": "Camera-7 Backchannel",
+  "63357/tcp": "Camera-8 Video Stream",
+  "63358/tcp": "Camera-8 Audio Stream",
+  "63359/tcp": "Camera-8 Backchannel",
+  "63360/tcp": "Camera-9 Video Stream",
+  "63361/tcp": "Camera-9 Audio Stream",
+  "63362/tcp": "Camera-9 Backchannel",
+  "63363/tcp": "Camera-10 Video Stream",
+  "63364/tcp": "Camera-10 Audio Stream",
+  "63365/tcp": "Camera-10 Backchannel",
+  "63366/tcp": "Camera-11 Video Stream",
+  "63367/tcp": "Camera-11 Audio Stream",
+  "63368/tcp": "Camera-11 Backchannel",
+  "63369/tcp": "Camera-12 Video Stream",
+  "63370/tcp": "Camera-12 Audio Stream",
+  "63371/tcp": "Camera-12 Backchannel",
+  "63372/tcp": "Camera-13 Video Stream",
+  "63373/tcp": "Camera-13 Audio Stream",
+  "63374/tcp": "Camera-13 Backchannel",
+  "63375/tcp": "Camera-14 Video Stream",
+  "63376/tcp": "Camera-14 Audio Stream",
+  "63377/tcp": "Camera-14 Backchannel",
+  "63378/tcp": "Camera-15 Video Stream",
+  "63379/tcp": "Camera-15 Audio Stream",
+  "63380/tcp": "Camera-15 Backchannel",
+}

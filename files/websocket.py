@@ -73,13 +73,11 @@ class EufySecurityWebSocket:
 
     def on_close(self, future="") -> None:
         print(f" - WebSocket Connection Closed. %s", future)
-        print(
-            f" - WebSocket Connection Closed. %s", self.close_callback
-        )
+        print(f" - WebSocket Connection Closed. %s", self.close_callback)
         if self.close_callback is not None:
             self.ws = None
             asyncio.run_coroutine_threadsafe(self.close_callback(), self.loop)
 
     async def send_message(self, message):
-        #print(f" - WebSocket message sent. %s", message)
+        # print(f" - WebSocket message sent. %s", message)
         await self.ws.send_str(message)
