@@ -10,7 +10,7 @@ import sys
 import signal
 from http.server import BaseHTTPRequestHandler, HTTPServer
 import os
-from queue import Queue
+from queue import Empty, Queue
 from typing import Any, Optional, Tuple
 
 RECV_CHUNK_SIZE = 8192  # Increased for better throughput
@@ -135,8 +135,13 @@ class ClientAcceptThread(threading.Thread):
         
         while not self.run_event.is_set():
             self.update_threads()
+
             sys.stdout.flush()
             try:
+                readable, _, _ = select.select([self.socket], [], [], 1.0)
+                if not readable:
+                    continue
+
                 client_sock, client_addr = self.socket.accept()
                 print("New connection added: ", client_addr, " for ", self.name)
                 sys.stdout.flush()
@@ -171,8 +176,8 @@ class ClientAcceptThread(threading.Thread):
                     self.connector.schedule_start_livestream()
                     self.my_threads.append(thread)
                     thread.start()
-            except socket.timeout:
-                pass
+            except (socket.timeout, OSError):
+                continue
 
 class ClientSendThread(threading.Thread):
     def __init__(self, client_sock, run_event, name, connector, serialno):
@@ -190,21 +195,31 @@ class ClientSendThread(threading.Thread):
         sys.stdout.flush()
 
         try:
+            pending_item = None
             while not self.run_event.is_set():
+                if pending_item is None:
+                    try:
+                        pending_item = self.queue.get(timeout=1.0)
+                    except Empty:
+                        continue
+
+                if self.run_event.is_set():
+                    break
+
                 ready_to_read, ready_to_write, in_error = \
-                    select.select([], [self.client_sock], [self.client_sock], 0.5)  # Reduced timeout for faster response
+                    select.select([], [self.client_sock], [self.client_sock], 1.0)
                 if len(in_error):
                     print("Exception in socket", self.name)
                     sys.stdout.flush()
                     break
-                if len(ready_to_write) and not self.queue.empty():
+                if len(ready_to_write):
                     try:
-                        item = self.queue.get(True)
-                        if isinstance(item, dict) and "data" in item:
-                            payload = item["data"]
+                        if isinstance(pending_item, dict) and "data" in pending_item:
+                            payload = pending_item["data"]
                         else:
-                            payload = item
+                            payload = pending_item
                         self.client_sock.sendall(bytearray(payload))
+                        pending_item = None
                     except (BrokenPipeError, ConnectionResetError, OSError) as e:
                         now = time.time()
                         # go2rtc/ffmpeg often connects, probes, and disconnects quickly; avoid log spam
@@ -213,6 +228,8 @@ class ClientSendThread(threading.Thread):
                             sys.stdout.flush()
                             self._last_send_error_log = now
                         break
+                else:
+                    time.sleep(0.05)
         except socket.error as e:
             print("Connection lost", self.name, e)
             pass
@@ -518,6 +535,13 @@ class Connector:
             sys.stdout.flush()
 
         # Keep a rolling buffer so we can detect SPS/PPS/VPS even if split across frames
+        if self.video_codec:
+            codec_l = self.video_codec.lower()
+            if ("h265" in codec_l or "hevc" in codec_l) and self._last_vps and self._last_sps and self._last_pps and self._last_idr:
+                return
+            if not ("h265" in codec_l or "hevc" in codec_l) and self._last_sps and self._last_pps and self._last_idr:
+                return
+
         self._video_parse_buffer.extend(chunk)
         if len(self._video_parse_buffer) > 512 * 1024:
             # Keep the tail; parameter sets repeat periodically and are small
