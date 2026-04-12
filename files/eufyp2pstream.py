@@ -102,6 +102,9 @@ class ClientAcceptThread(threading.Thread):
         self.my_threads = []
         self.last_cleanup_time = 0
         self.ready_to_accept = threading.Event()  # Don't accept until data is ready
+        self.skip_non_idr = self.name == "Video"
+        print(f"[{self.name}] ClientAcceptThread initialized, skip_non_idr={self.skip_non_idr}")
+        sys.stdout.flush()
 
     def update_threads(self):
         my_threads_before = len(self.my_threads)
@@ -171,6 +174,11 @@ class ClientAcceptThread(threading.Thread):
                     thread = ClientSendThread(client_sock, run_event, self.name, self.connector, self.serialno)
                     self.queues.append(thread.queue)
                     if self.name == "Video":
+                        thread.skip_non_idr = True
+                        # Re-enable accept thread's flag so we can detect IDR for this new thread
+                        self.skip_non_idr = True
+                        print(f"[Video] New client thread created with skip_non_idr=True, accept thread flag reset")
+                        sys.stdout.flush()
                         self.connector.prime_video_queue(thread.queue)
                     # Ensure livestream is running (idempotent due to debouncing)
                     self.connector.schedule_start_livestream()
@@ -189,6 +197,9 @@ class ClientSendThread(threading.Thread):
         self.connector = connector
         self.serialno = serialno
         self._last_send_error_log = 0.0
+        self.skip_non_idr = False  # Will be set by connector if needed
+        print(f"[{self.name}] ClientSendThread created, skip_non_idr={self.skip_non_idr}")
+        sys.stdout.flush()
 
     def run(self):
         print("Thread running: ", self.name)
@@ -528,6 +539,45 @@ class Connector:
             i += 1
         return out
 
+    def _is_idr_frame(self, chunk: bytes) -> bool:
+        """Check if chunk contains any IDR (keyframe) NAL unit."""
+        if not self.video_codec:
+            return False
+        codec_l = self.video_codec.lower()
+        starts = self._find_start_codes(chunk)
+        if len(starts) < 1:
+            return False
+        
+        # Check ALL NAL units in the chunk, not just the first one
+        for (idx, sc_len), next_start in zip(starts, starts[1:] + [(len(chunk), 0)]):
+            if idx + sc_len + 1 > len(chunk):
+                continue
+            header = chunk[idx + sc_len]
+            if "h265" in codec_l or "hevc" in codec_l:
+                nal_type = (header >> 1) & 0x3F
+                if nal_type in (19, 20):
+                    print(f"[IDR] HEVC IDR frame found (NAL type {nal_type})")
+                    sys.stdout.flush()
+                    return True
+            else:
+                nal_type = header & 0x1F
+                if nal_type == 5:
+                    print(f"[IDR] H.264 IDR frame found (NAL type 5)")
+                    sys.stdout.flush()
+                    return True
+        
+        # No IDR found, log what we saw
+        nal_types = []
+        for (idx, sc_len) in starts[:3]:  # Log first 3 NALs
+            if idx + sc_len + 1 <= len(chunk):
+                header = chunk[idx + sc_len]
+                if "h265" in codec_l or "hevc" in codec_l:
+                    nal_type = (header >> 1) & 0x3F
+                else:
+                    nal_type = header & 0x1F
+                nal_types.append(nal_type)
+        return False
+
     def _update_video_codec_cache(self, chunk: bytes, codec: Optional[str]) -> None:
         if codec and not self.video_codec:
             self.video_codec = codec
@@ -859,25 +909,48 @@ class Connector:
                     codec = meta.get("videoCodec") if isinstance(meta, dict) else None
                     event_value = message[EVENT_CONFIGURATION[event_type]["value"]]
                     chunk, shape = self._extract_buffer_bytes(event_value)
+                    is_idr = False
                     if shape and not self._video_buffer_shape:
                         self._video_buffer_shape = shape
                     if chunk:
                         self._update_video_codec_cache(chunk, codec)
-                except Exception:
-                    pass
+                        is_idr = self._is_idr_frame(chunk)
+                        if is_idr:
+                            # Check if any thread is still waiting for an IDR
+                            any_waiting = any(thread.skip_non_idr for thread in self.video_thread.my_threads)
+                            if any_waiting:
+                                print(f"[VIDEO] First IDR detected, enabling frame distribution for all threads")
+                                sys.stdout.flush()
+                                # Update all threads' skip flags
+                                for thread in self.video_thread.my_threads:
+                                    thread.skip_non_idr = False
+                            # Also reset the accept thread's flag so new connections don't skip
+                            self.video_thread.skip_non_idr = False
+                except Exception as e:
+                    print(f"[VIDEO] Error in video frame processing: {e}")
+                    import traceback
+                    traceback.print_exc()
+                    sys.stdout.flush()
                 
                 event_value = message[EVENT_CONFIGURATION[event_type]["value"]]
                 event_data_type = EVENT_CONFIGURATION[event_type]["type"]
                 if event_data_type == "event":
-                    for queue in self.video_thread.queues:
+                    video_threads_count = len(self.video_thread.my_threads)
+                    skipped_count = 0
+                    sent_count = 0
+                    for thread in self.video_thread.my_threads:
+                        if thread.skip_non_idr and not is_idr:
+                            skipped_count += 1
+                            continue
                         # Aggressive dropping for real-time: keep only latest frames
-                        while queue.qsize() > 3:  # Keep only ~0.2s of video buffered
+                        while thread.queue.qsize() > 3:  # Keep only ~0.2s of video buffered
                             try:
-                                queue.get(False)
+                                thread.queue.get(False)
                             except:
                                 break
                         try:
-                            queue.put(event_value, block=False)
+                            thread.queue.put(event_value, block=False)
+                            sent_count += 1
                         except:
                             pass
             
