@@ -815,27 +815,41 @@ class Connector:
         self.last_event_time = time.time()
 
     async def _monitor_websocket_health(self) -> None:
-        """Monitor websocket event flow and reconnect if stale."""
+        """Monitor websocket event flow and reconnect if stale while streaming.
+        
+        Only enforce the timeout when there are active clients. If no clients are 
+        connected, it's normal to have no events.
+        """
         print("[WS_MONITOR] Event monitor started")
         sys.stdout.flush()
         while not self.run_event.is_set():
             try:
                 await asyncio.sleep(5)  # Check every 5 seconds
-                time_since_event = time.time() - self.last_event_time
-                if time_since_event > self.ws_event_timeout_seconds:
-                    print(f"[WS_MONITOR] No events for {time_since_event:.1f}s (threshold: {self.ws_event_timeout_seconds}s) - websocket appears stale!")
-                    sys.stdout.flush()
-                    if self.ws and not self.ws.ws.closed:
-                        print("[WS_MONITOR] Forcing websocket close to trigger reconnect...")
+                
+                # Only check for stale events if there are active video/audio clients
+                has_video_clients = hasattr(self, "video_thread") and self.video_thread and len(self.video_thread.queues) > 0
+                has_audio_clients = hasattr(self, "audio_thread") and self.audio_thread and len(self.audio_thread.queues) > 0
+                
+                if has_video_clients or has_audio_clients:
+                    time_since_event = time.time() - self.last_event_time
+                    if time_since_event > self.ws_event_timeout_seconds:
+                        print(f"[WS_MONITOR] ALERT: No events for {time_since_event:.1f}s with active clients (video:{has_video_clients}, audio:{has_audio_clients})!")
                         sys.stdout.flush()
-                        try:
-                            await self.ws.ws.close()
-                        except Exception as e:
-                            print(f"[WS_MONITOR] Error closing stale websocket: {e}")
+                        if self.ws and not self.ws.ws.closed:
+                            print("[WS_MONITOR] Forcing websocket close to trigger reconnect...")
                             sys.stdout.flush()
-                    self.last_event_time = time.time()  # Reset timer after action
+                            try:
+                                await self.ws.ws.close()
+                            except Exception as e:
+                                print(f"[WS_MONITOR] Error closing stale websocket: {e}")
+                                sys.stdout.flush()
+                        self.last_event_time = time.time()  # Reset timer after action
+                    else:
+                        print(f"[WS_MONITOR] Stream active: events flowing ({time_since_event:.1f}s since last event)")
+                        sys.stdout.flush()
                 else:
-                    print(f"[WS_MONITOR] Events flowing normally (last event: {time_since_event:.1f}s ago)")
+                    # No active clients - events are not expected
+                    print("[WS_MONITOR] No active clients - event monitoring idle")
                     sys.stdout.flush()
             except asyncio.CancelledError:
                 print("[WS_MONITOR] Monitor task cancelled")
