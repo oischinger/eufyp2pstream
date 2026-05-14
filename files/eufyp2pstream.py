@@ -961,18 +961,33 @@ class Connector:
             
             if message["event"] == "livestream error":
                 print("Livestream Error - attempting restart!")
+                sys.stdout.flush()
                 self._ensure_async_primitives()
                 assert self.livestream_lock is not None
                 async with self.livestream_lock:
                     self.livestream_active = False
                     # Reset ready flags so threads wait for new data
-                    self.video_thread.ready_to_accept.clear()
-                    self.audio_thread.ready_to_accept.clear()
+                    try:
+                        if hasattr(self, "video_thread") and self.video_thread:
+                            self.video_thread.ready_to_accept.clear()
+                    except Exception as e:
+                        print(f"Error clearing video_thread flag: {e}")
+                        sys.stdout.flush()
+                    try:
+                        if hasattr(self, "audio_thread") and self.audio_thread:
+                            self.audio_thread.ready_to_accept.clear()
+                    except Exception as e:
+                        print(f"Error clearing audio_thread flag: {e}")
+                        sys.stdout.flush()
                 # Wait a bit before restarting
                 await asyncio.sleep(1.5)
                 # Only restart if clients are still connected
-                if self.ws and len(self.video_thread.queues) > 0:
-                    await self._start_livestream()
+                try:
+                    if self.ws and hasattr(self, "video_thread") and self.video_thread and len(self.video_thread.queues) > 0:
+                        await self._start_livestream()
+                except Exception as e:
+                    print(f"Error restarting livestream after error: {e}")
+                    sys.stdout.flush()
 
 # Websocket connector
 c = Connector(run_event)
