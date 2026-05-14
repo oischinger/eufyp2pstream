@@ -416,6 +416,12 @@ class Connector:
         self.last_event_time = time.time()
         self.ws_event_timeout_seconds = 30  # Reconnect if no events for 30 seconds
         self.ws_monitor_task: Optional[asyncio.Task] = None
+        
+        # Event statistics for logging
+        self.event_stats_video_count = 0
+        self.event_stats_audio_count = 0
+        self.event_stats_start_time = time.time()
+        self.stats_reporter_task: Optional[asyncio.Task] = None
 
     def stop(self):
         try:
@@ -814,6 +820,41 @@ class Connector:
         """Track that we received an event from the websocket."""
         self.last_event_time = time.time()
 
+    async def _report_event_statistics(self) -> None:
+        """Periodically report event statistics during streaming."""
+        print("[WS_STATS] Statistics reporter started")
+        sys.stdout.flush()
+        while not self.run_event.is_set():
+            try:
+                await asyncio.sleep(30)  # Report every 30 seconds
+                
+                # Only report if actively streaming
+                has_video_clients = hasattr(self, "video_thread") and self.video_thread and len(self.video_thread.queues) > 0
+                has_audio_clients = hasattr(self, "audio_thread") and self.audio_thread and len(self.audio_thread.queues) > 0
+                
+                if has_video_clients or has_audio_clients:
+                    elapsed = time.time() - self.event_stats_start_time
+                    video_rate = self.event_stats_video_count / elapsed if elapsed > 0 else 0
+                    audio_rate = self.event_stats_audio_count / elapsed if elapsed > 0 else 0
+                    print(f"[WS_STATS] {self.event_stats_video_count} video frames ({video_rate:.1f}/s), {self.event_stats_audio_count} audio frames ({audio_rate:.1f}/s) in {elapsed:.0f}s")
+                    sys.stdout.flush()
+                    
+                    # Reset counters for next period
+                    self.event_stats_video_count = 0
+                    self.event_stats_audio_count = 0
+                    self.event_stats_start_time = time.time()
+            except asyncio.CancelledError:
+                print("[WS_STATS] Statistics reporter cancelled")
+                sys.stdout.flush()
+                break
+            except Exception as e:
+                print(f"[WS_STATS] Reporter error: {e}")
+                sys.stdout.flush()
+
+    def _update_event_timestamp(self):
+        """Track that we received an event from the websocket."""
+        self.last_event_time = time.time()
+
     async def _monitor_websocket_health(self) -> None:
         """Monitor websocket event flow and reconnect if stale while streaming.
         
@@ -948,8 +989,16 @@ class Connector:
         if message_type == "event":
             message = payload[message_type]
             event_type = message["event"]
-            print(f"[WS_RX] Event: {event_type}")
-            sys.stdout.flush()
+            
+            # Count streaming events but don't log each one to reduce spam
+            if event_type == "livestream video data":
+                self.event_stats_video_count += 1
+            elif event_type == "livestream audio data":
+                self.event_stats_audio_count += 1
+            else:
+                # Log non-streaming events for debugging
+                print(f"[WS_RX] Event: {event_type}")
+                sys.stdout.flush()
             
             if message["event"] == "livestream audio data":
                 # Signal that audio data is flowing - ready to accept connections
@@ -1111,6 +1160,12 @@ async def init_websocket() -> None:
                     c.ws_monitor_task = asyncio.create_task(c._monitor_websocket_health())
                     print("[WS_INIT] Event monitor task started")
                     sys.stdout.flush()
+                
+                # Start the statistics reporter
+                if c.stats_reporter_task is None or c.stats_reporter_task.done():
+                    c.stats_reporter_task = asyncio.create_task(c._report_event_statistics())
+                    print("[WS_INIT] Statistics reporter task started")
+                    sys.stdout.flush()
 
                 # Prefer setting schema before listening so server formats events accordingly
                 await ws.send_message(json.dumps(SET_API_SCHEMA))
@@ -1140,6 +1195,15 @@ async def init_websocket() -> None:
                     except asyncio.CancelledError:
                         pass
                     c.ws_monitor_task = None
+                
+                # Cancel statistics reporter task
+                if c.stats_reporter_task and not c.stats_reporter_task.done():
+                    c.stats_reporter_task.cancel()
+                    try:
+                        await c.stats_reporter_task
+                    except asyncio.CancelledError:
+                        pass
+                    c.stats_reporter_task = None
                 
                 c.setWs(None)
 
