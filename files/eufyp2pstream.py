@@ -821,6 +821,11 @@ class Connector:
                         self.backchannel_thread.serialno = self.serialno
                     except Exception:
                         pass
+
+                # If the serial becomes available after a client already connected,
+                # trigger livestream start so the connection can receive video data.
+                if self.serialno and hasattr(self, "video_thread") and len(self.video_thread.queues) > 0:
+                    self.schedule_start_livestream()
             
             # Update state based on responses
             if message_id == "start_livestream":
