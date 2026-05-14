@@ -411,6 +411,11 @@ class Connector:
         
         # Command queues for thread-safe async communication
         self.command_queue = Queue()
+        
+        # WebSocket event timeout detection (detect stale connections)
+        self.last_event_time = time.time()
+        self.ws_event_timeout_seconds = 30  # Reconnect if no events for 30 seconds
+        self.ws_monitor_task: Optional[asyncio.Task] = None
 
     def stop(self):
         try:
@@ -635,6 +640,8 @@ class Connector:
     # Async methods with state management
     async def _start_livestream(self):
         if not self.ws or not self.serialno:
+            print(f"[LIVESTREAM] Cannot start: ws={self.ws is not None}, serial={self.serialno}")
+            sys.stdout.flush()
             return
         self._ensure_async_primitives()
         assert self.livestream_lock is not None
@@ -643,6 +650,8 @@ class Connector:
             current_time = time.time()
             # Debounce - don't start if we recently started
             if self.livestream_active or (current_time - self.last_livestream_start) < 2.0:  # Reduced from 3s to 2s
+                print(f"[LIVESTREAM] Start debounced (active={self.livestream_active})")
+                sys.stdout.flush()
                 return
             
             self.livestream_active = True
@@ -650,28 +659,42 @@ class Connector:
             msg = START_P2P_LIVESTREAM_MESSAGE.copy()
             msg["serialNumber"] = self.serialno
             try:
+                print(f"[LIVESTREAM] Sending START command for {self.serialno}")
+                sys.stdout.flush()
                 await self.ws.send_message(json.dumps(msg))
+                print(f"[LIVESTREAM] START command sent successfully")
+                sys.stdout.flush()
             except Exception as e:
-                print(f"Error starting livestream: {e}")
+                print(f"[LIVESTREAM] Error starting livestream: {e}")
+                sys.stdout.flush()
                 self.livestream_active = False
 
     async def _stop_livestream(self):
         if not self.ws or not self.serialno:
+            print(f"[LIVESTREAM] Cannot stop: ws={self.ws is not None}, serial={self.serialno}")
+            sys.stdout.flush()
             return
         self._ensure_async_primitives()
         assert self.livestream_lock is not None
 
         async with self.livestream_lock:
             if not self.livestream_active:
+                print(f"[LIVESTREAM] Stop skipped (not active)")
+                sys.stdout.flush()
                 return
             
             self.livestream_active = False
             msg = STOP_P2P_LIVESTREAM_MESSAGE.copy()
             msg["serialNumber"] = self.serialno
             try:
+                print(f"[LIVESTREAM] Sending STOP command for {self.serialno}")
+                sys.stdout.flush()
                 await self.ws.send_message(json.dumps(msg))
+                print(f"[LIVESTREAM] STOP command sent successfully")
+                sys.stdout.flush()
             except Exception as e:
-                print(f"Error stopping livestream: {e}")
+                print(f"[LIVESTREAM] Error stopping livestream: {e}")
+                sys.stdout.flush()
 
     async def _start_talkback(self):
         if not self.ws or not self.serialno:
@@ -757,12 +780,14 @@ class Connector:
             sys.stdout.flush()
 
     async def on_open(self):
-        print(f" on_open - executed")
+        print(f"[WS_LIFECYCLE] WebSocket connection opened")
+        sys.stdout.flush()
         if self.ws_closed_event is not None:
             self.ws_closed_event.clear()
 
     async def on_close(self):
-        print(f" on_close - executed")
+        print(f"[WS_LIFECYCLE] WebSocket connection closed")
+        sys.stdout.flush()
         # Do not terminate the whole add-on; allow reconnect loop to recover.
         self.ws = None
         self._ensure_async_primitives()
@@ -785,14 +810,55 @@ class Connector:
     async def on_error(self, message):
         print(f" on_error - executed - {message}")
 
+    def _update_event_timestamp(self):
+        """Track that we received an event from the websocket."""
+        self.last_event_time = time.time()
+
+    async def _monitor_websocket_health(self) -> None:
+        """Monitor websocket event flow and reconnect if stale."""
+        print("[WS_MONITOR] Event monitor started")
+        sys.stdout.flush()
+        while not self.run_event.is_set():
+            try:
+                await asyncio.sleep(5)  # Check every 5 seconds
+                time_since_event = time.time() - self.last_event_time
+                if time_since_event > self.ws_event_timeout_seconds:
+                    print(f"[WS_MONITOR] No events for {time_since_event:.1f}s (threshold: {self.ws_event_timeout_seconds}s) - websocket appears stale!")
+                    sys.stdout.flush()
+                    if self.ws and not self.ws.ws.closed:
+                        print("[WS_MONITOR] Forcing websocket close to trigger reconnect...")
+                        sys.stdout.flush()
+                        try:
+                            await self.ws.ws.close()
+                        except Exception as e:
+                            print(f"[WS_MONITOR] Error closing stale websocket: {e}")
+                            sys.stdout.flush()
+                    self.last_event_time = time.time()  # Reset timer after action
+                else:
+                    print(f"[WS_MONITOR] Events flowing normally (last event: {time_since_event:.1f}s ago)")
+                    sys.stdout.flush()
+            except asyncio.CancelledError:
+                print("[WS_MONITOR] Monitor task cancelled")
+                sys.stdout.flush()
+                break
+            except Exception as e:
+                print(f"[WS_MONITOR] Monitor error: {e}")
+                sys.stdout.flush()
+
+    async def on_error(self, message):
+        print(f" on_error - executed - {message}")
+        sys.stdout.flush()
+        self._update_event_timestamp()
+
     async def on_message(self, message):
+        self._update_event_timestamp()  # Track that we received an event
         payload = message.json()
         message_type: str = payload["type"]
         
         if message_type == "result":
             message_id = payload["messageId"]
             if message_id != SEND_TALKBACK_AUDIO_DATA["messageId"]:
-                print(f"on_message result: {payload}")
+                print(f"[WS_RX] Result message: {message_id}")
                 sys.stdout.flush()
             
             if message_id == START_LISTENING_MESSAGE["messageId"]:
@@ -868,6 +934,7 @@ class Connector:
         if message_type == "event":
             message = payload[message_type]
             event_type = message["event"]
+            print(f"[WS_RX] Event: {event_type}")
             sys.stdout.flush()
             
             if message["event"] == "livestream audio data":
@@ -1002,6 +1069,8 @@ async def init_websocket() -> None:
     backoff_s = 1.0
     async with aiohttp.ClientSession() as session:
         while not run_event.is_set():
+            print(f"[WS_INIT] Attempting WebSocket connection (backoff: {backoff_s:.1f}s)...")
+            sys.stdout.flush()
             ws: EufySecurityWebSocket = EufySecurityWebSocket(
                 "402f1039-eufy-security-ws",
                 sys.argv[1],
@@ -1017,11 +1086,24 @@ async def init_websocket() -> None:
 
             try:
                 await ws.connect()
+                print("[WS_INIT] WebSocket connected successfully")
+                sys.stdout.flush()
+                
+                # Reset event timestamp on successful connection
+                c.last_event_time = time.time()
+                
+                # Start the event monitor (will detect stale connections)
+                if c.ws_monitor_task is None or c.ws_monitor_task.done():
+                    c.ws_monitor_task = asyncio.create_task(c._monitor_websocket_health())
+                    print("[WS_INIT] Event monitor task started")
+                    sys.stdout.flush()
 
                 # Prefer setting schema before listening so server formats events accordingly
                 await ws.send_message(json.dumps(SET_API_SCHEMA))
                 await ws.send_message(json.dumps(START_LISTENING_MESSAGE))
                 await ws.send_message(json.dumps(DRIVER_CONNECT_MESSAGE))
+                print("[WS_INIT] Initialization messages sent")
+                sys.stdout.flush()
 
                 backoff_s = 1.0
 
@@ -1033,13 +1115,24 @@ async def init_websocket() -> None:
                     while not run_event.is_set():
                         await asyncio.sleep(1)
             except Exception as ex:
-                print(f"WebSocket error: {ex}")
+                print(f"[WS_INIT] WebSocket error: {ex}")
                 sys.stdout.flush()
             finally:
+                # Cancel monitor task
+                if c.ws_monitor_task and not c.ws_monitor_task.done():
+                    c.ws_monitor_task.cancel()
+                    try:
+                        await c.ws_monitor_task
+                    except asyncio.CancelledError:
+                        pass
+                    c.ws_monitor_task = None
+                
                 c.setWs(None)
 
             if run_event.is_set():
                 break
+            print(f"[WS_INIT] Reconnecting in {backoff_s:.1f}s...")
+            sys.stdout.flush()
             await asyncio.sleep(backoff_s)
             backoff_s = min(backoff_s * 2.0, 30.0)
 
