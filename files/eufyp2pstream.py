@@ -369,14 +369,14 @@ class Connector:
         video_sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
         video_sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, SOCKET_BUFFER_SIZE)
         video_sock.settimeout(0.5)  # Faster accept response
-        video_sock.listen(5)  # Increased backlog
+        video_sock.listen(32)  # Increased backlog for reconnect-heavy clients
         
         audio_sock.bind(("0.0.0.0", 63337))
         audio_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         audio_sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
         audio_sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, SOCKET_BUFFER_SIZE)
         audio_sock.settimeout(0.5)  # Faster accept response
-        audio_sock.listen(5)  # Increased backlog
+        audio_sock.listen(32)  # Increased backlog for reconnect-heavy clients
         
         backchannel_sock.bind(("0.0.0.0", 63338))
         backchannel_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -384,7 +384,7 @@ class Connector:
         backchannel_sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
         backchannel_sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, SOCKET_BUFFER_SIZE)
         backchannel_sock.settimeout(0.5)  # Faster accept response
-        backchannel_sock.listen(5)  # Increased backlog
+        backchannel_sock.listen(32)  # Increased backlog for reconnect-heavy clients
         
         self.ws = None
         self.run_event = run_event
@@ -414,7 +414,7 @@ class Connector:
         
         # WebSocket event timeout detection (detect stale connections)
         self.last_event_time = time.time()
-        self.ws_event_timeout_seconds = 30  # Reconnect if no events for 30 seconds
+        self.ws_event_timeout_seconds = 60  # Reconnect if no events for 60 seconds
         self.ws_monitor_task: Optional[asyncio.Task] = None
         
         # Event statistics for logging
@@ -491,10 +491,17 @@ class Connector:
         This reduces ffmpeg/go2rtc start failures when the connection begins mid-stream
         without parameter sets or a keyframe.
         """
-        if self.video_codec is None:
+        codec = None
+        if self.video_codec:
+            codec = self.video_codec.lower()
+        elif self._last_vps or self._last_sps or self._last_pps:
+            # Use cached parameter sets even if codec metadata hasn't arrived yet.
+            codec = "hevc" if self._last_vps else "h264"
+
+        if codec is None:
             return
+
         parts: list[bytes] = []
-        codec = self.video_codec.lower()
         if "h265" in codec or "hevc" in codec:
             if self._last_vps:
                 parts.append(self._last_vps)
@@ -508,11 +515,12 @@ class Connector:
             if self._last_pps:
                 parts.append(self._last_pps)
 
-        if self._last_idr:
-            parts.append(self._last_idr)
-
         if not parts:
             return
+
+        # If we have a cached IDR together with codec parameter sets, send it too.
+        if self._last_idr:
+            parts.append(self._last_idr)
 
         # Keep this small to avoid introducing latency
         preamble = b"".join(parts)
@@ -786,13 +794,15 @@ class Connector:
             sys.stdout.flush()
 
     async def on_open(self):
-        print(f"[WS_LIFECYCLE] WebSocket connection opened")
+        print(f"[WS_LIFECYCLE] WebSocket connection opened; serial={self.serialno}")
         sys.stdout.flush()
         if self.ws_closed_event is not None:
             self.ws_closed_event.clear()
 
     async def on_close(self):
-        print(f"[WS_LIFECYCLE] WebSocket connection closed")
+        video_clients = hasattr(self, "video_thread") and self.video_thread and len(self.video_thread.queues)
+        audio_clients = hasattr(self, "audio_thread") and self.audio_thread and len(self.audio_thread.queues)
+        print(f"[WS_LIFECYCLE] WebSocket connection closed; serial={self.serialno}, video_clients={video_clients}, audio_clients={audio_clients}")
         sys.stdout.flush()
         # Do not terminate the whole add-on; allow reconnect loop to recover.
         self.ws = None
@@ -867,16 +877,25 @@ class Connector:
             try:
                 await asyncio.sleep(5)  # Check every 5 seconds
                 
+                # Ensure client state is refreshed before health checks.
+                if hasattr(self, "video_thread") and self.video_thread:
+                    self.video_thread.update_threads()
+                if hasattr(self, "audio_thread") and self.audio_thread:
+                    self.audio_thread.update_threads()
+
                 # Only check for stale events if there are active video/audio clients
                 has_video_clients = hasattr(self, "video_thread") and self.video_thread and len(self.video_thread.queues) > 0
                 has_audio_clients = hasattr(self, "audio_thread") and self.audio_thread and len(self.audio_thread.queues) > 0
+                ws_status = "connected" if self.ws and hasattr(self.ws, "ws") and self.ws.ws and not self.ws.ws.closed else "disconnected"
+                print(f"[WS_MONITOR] Health check: status={ws_status}, video_clients={has_video_clients}, audio_clients={has_audio_clients}, last_event_age={(time.time() - self.last_event_time):.1f}s")
+                sys.stdout.flush()
                 
                 if has_video_clients or has_audio_clients:
                     time_since_event = time.time() - self.last_event_time
                     if time_since_event > self.ws_event_timeout_seconds:
                         print(f"[WS_MONITOR] ALERT: No events for {time_since_event:.1f}s with active clients (video:{has_video_clients}, audio:{has_audio_clients})!")
                         sys.stdout.flush()
-                        if self.ws and not self.ws.ws.closed:
+                        if self.ws and hasattr(self.ws, "ws") and not self.ws.ws.closed:
                             print("[WS_MONITOR] Forcing websocket close to trigger reconnect...")
                             sys.stdout.flush()
                             try:
@@ -1176,9 +1195,13 @@ async def init_websocket() -> None:
 
                 backoff_s = 1.0
 
+                print("[WS_INIT] Waiting for websocket close event or stop signal")
+                sys.stdout.flush()
                 # Wait until websocket closes (callback sets the event) or we are asked to stop
                 if c.ws_closed_event is not None:
                     await c.ws_closed_event.wait()
+                    print("[WS_INIT] Websocket close event received")
+                    sys.stdout.flush()
                 else:
                     # Fallback; should not normally happen
                     while not run_event.is_set():
